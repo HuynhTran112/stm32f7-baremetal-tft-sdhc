@@ -1,247 +1,206 @@
 # High-Performance 60 FPS Bare-Metal Video Player & SDHC Subsystem
 
 [![Target MCU](https://img.shields.io/badge/MCU-STM32F746NG%20(Cortex--M7%20%40%20216MHz)-red.svg)](https://www.st.com/en/microcontrollers-microprocessors/stm32f746ng.html)
-[![Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#hardware-register-architecture)
-[![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#display-subsystem-ltdc--dma2d-chrom-art)
-[![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz)-purple.svg)](#storage-subsystem-sdmmc--chan-fatfs)
+[![Firmware Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#-key-features)
+[![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#-requirements)
+[![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz)-purple.svg)](#-requirements)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
-A high-performance multimedia player and storage engine written in **100% Bare-Metal C directly targeting hardware registers (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion video directly from a **FAT32 MicroSD SDHC card** at a constant **60 FPS** without frame tearing or audio-video jitter, utilizing **FMC SDRAM (8MB @ 108MHz)**, **LTDC**, and the **DMA2D Chrom-ART Accelerator** to achieve **0% CPU load** during frame transfers.
+A high-performance multimedia player and storage engine written in **100% Bare-Metal C targeting hardware registers directly (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion video directly from a **FAT32 MicroSD SDHC card** at a steady **60 FPS** without screen tearing, utilizing **FMC SDRAM (8MB @ 108MHz)**, **LTDC**, and the **DMA2D Chrom-ART Accelerator** to achieve **0% CPU load** during frame transfers.
 
 ---
 
-## Table of Contents
+## 📑 Table of Contents
 
-- [System Architecture](#system-architecture)
-- [Key Engineering Features](#key-engineering-features)
-- [Hardware Register Architecture](#hardware-register-architecture)
-- [Clock Tree & Over-Drive Mode (216 MHz)](#clock-tree--over-drive-mode-216-mhz)
-- [External Memory Subsystem (FMC SDRAM 8MB)](#external-memory-subsystem-fmc-sdram-8mb)
-- [Display Subsystem (LTDC & DMA2D Chrom-ART)](#display-subsystem-ltdc--dma2d-chrom-art)
-- [Storage Subsystem (SDMMC & ChaN FatFs)](#storage-subsystem-sdmmc--chan-fatfs)
-- [ARM Cortex-M7 L1 D-Cache Coherency](#arm-cortex-m7-l1-d-cache-coherency)
-- [Project Directory Layout](#project-directory-layout)
-- [Building, Flashing & Video Conversion Tool](#building-flashing--video-conversion-tool)
-- [Author Information](#author-information)
+- [Demo](#-demo)
+- [Key Features](#-key-features)
+- [Requirements](#️-requirements)
+- [Hardware Connections](#-hardware-connections)
+- [Getting Started](#-getting-started)
+- [System Behavior & Workflow](#-system-behavior--workflow)
+- [Project Structure](#️-project-structure)
+- [System Protection](#️-system-protection)
+- [Author Information](#-author-information)
 
 ---
 
-## System Architecture
+## 📷 Demo
+
+<p align="center">
+  <img src="docs/images/tft_player_hero.png" alt="60 FPS Video Playback Demo" width="650">
+</p>
 
 ```text
-+-----------------------------------------------------------------------------------------------+
-| STM32F746NG (ARM Cortex-M7 @ 216 MHz) - 100% BARE-METAL REGISTER PIPELINE                    |
-|                                                                                               |
-|  +-------------------------------------+      +--------------------------------------------+  |
-|  | MicroSD SDHC (Class 10 / UHS-I)     |      | FMC SDRAM Subsystem (IS42S16400J - 8 MB)   |  |
-|  | - 4-bit Data Bus @ 48 MHz           |      | - 16-bit Data Bus @ 108 MHz                |  |
-|  | - Block Addressing (512-Byte LBA)   |      | - Bank 1 Base Address: 0xC0000000          |  |
-|  +------------------+------------------+      +---------------------+----------------------+  |
-|                     |                                               ^                         |
-|                     | SDMMC FIFO / DMA2 Stream 3                    | Buffer Allocation       |
-|                     v                                               |                         |
-|  +-------------------------------------+                            |                         |
-|  | ChaN FatFs File Engine (FAT32)      |----------------------------+                         |
-|  | - Direct Sector Streaming (18 MB/s) |  Front Buffer: 0xC0000000 (255 KB)                   |
-|  | - Non-cacheable DMA Read Buffer     |  Back Buffer:  0xC0040000 (255 KB)                   |
-|  +-------------------------------------+                            |                         |
-|                                                                     v                         |
-|  +-----------------------------------------------------------------------------------------+  |
-|  | DMA2D Chrom-ART 2D Hardware Accelerator                                                 |  |
-|  | - Memory-to-Memory Frame Blitting (RGB565 -> RGB565)                                   |  |
-|  | - Zero CPU utilization during active video playback                                     |  |
-|  +--------------------------------------------+--------------------------------------------+  |
-|                                               |                                               |
-|                                               v Hardware Double Buffering VSYNC Reload        |
-|  +-----------------------------------------------------------------------------------------+  |
-|  | LTDC Display Controller (480x272 @ 60 FPS)                                              |  |
-|  | - Pixel Clock (LCD_CLK): 9.71 MHz generated from Dedicated PLLSAI                      |  |
-|  | - 24-bit Parallel RGB Bus to 4.3" RK043FN48H TFT                                        |  |
-|  +-----------------------------------------------------------------------------------------+  |
-+-----------------------------------------------------------------------------------------------+
+======================================================
+     STM32F746G BARE-METAL 60 FPS VIDEO PLAYER
+======================================================
+SYSCLK     : 216 MHz (Over-Drive Mode, ART Enabled)
+FMC SDRAM  : 8 MB @ 108 MHz (16-bit Data Bus)
+LTDC Panel : 480x272 @ 60.01 FPS (Pixel Clock 9.71 MHz)
+DMA2D Load : 0% CPU Utilization (Hardware Blitting)
+SDMMC Bus  : 4-bit @ 48 MHz (Sequential Read: ~18 MB/s)
+Filesystem : ChaN FatFs (FAT32 LBA Block Addressing)
+Status     : Constant 60 FPS, Zero Screen Tearing (VBR Sync)
+======================================================
 ```
 
 ---
 
-## Key Engineering Features
+## 📌 Key Features
 
-* **Zero Abstraction Layer (100% Bare-Metal):** Implemented purely using direct register manipulations (ARM Cortex-M7 memory-mapped I/O) without STM32Cube HAL, LL, or third-party libraries.
-* **Tear-Free 60 FPS Video Display:** Eliminates visual screen tearing completely using hardware Double Buffering coupled with LTDC Vertical Blanking Reload (`LTDC_SRCR.VBR`).
-* **Zero CPU Load During Rendering:** Offloads 100% of pixel block transfer operations to the DMA2D Chrom-ART engine, reducing CPU utilization from 85% to 0%.
-* **High-Throughput SDHC Storage:** Custom SDMMC driver in 4-bit bus mode @ 48 MHz using LBA block addressing and ChaN FatFs (FAT32), sustaining sequential reads up to 18 MB/s.
-* **L1 D-Cache Integrity:** Resolves Cortex-M7 cache coherency hazards using MPU non-cacheable memory attribute regions and software cache maintenance operations (`SCB_InvalidateDCache_by_Addr`).
-
----
-
-## Hardware Register Architecture
-
-Every register offset and configuration sequence is derived directly from the ST Reference Manual (**RM0385**):
-
-| Peripheral | Base Address | Bus | Bus Clock | Key Registers Used |
-| :--- | :--- | :--- | :--- | :--- |
-| **RCC** | `0x40023800` | AHB1 | 216 MHz | `CR`, `PLLCFGR`, `PLLSAICFGR`, `CFGR`, `AHB1ENR`, `APB2ENR` |
-| **PWR** | `0x40007000` | APB1 | 54 MHz | `CR1` (Over-Drive Mode: `VOS[1:0]`, `ODEN`, `ODSWEN`) |
-| **FLASH** | `0x40023C00` | AHB1 | 216 MHz | `ACR` (Latency 6 Wait States, `ARTEN`, `PRFTEN`) |
-| **FMC** | `0xA0000000` | AHB3 | 216 MHz | `SDCR[1:2]`, `SDTR[1:2]`, `SDCMR`, `SDRTR` |
-| **LTDC** | `0x40016800` | APB2 | 108 MHz | `SSCR`, `BPCR`, `AWCR`, `TWCR`, `SRCR`, `L1CFBLR`, `L1CFBAR` |
-| **DMA2D** | `0x4002B000` | AHB1 | 216 MHz | `CR`, `ISR`, `IFCR`, `OPFCCR`, `OMAR`, `OOR`, `NLR` |
-| **SDMMC1** | `0x40012C00` | APB2 | 108 MHz | `CLKCR`, `CMD`, `RESPCMD`, `RESP1..4`, `DTIMER`, `DLEN`, `DCTRL`, `DCOUNT`, `STA`, `ICR`, `FIFO` |
+* **100% Bare-Metal Register Programming:** Implemented entirely from scratch by manipulating memory-mapped I/O registers based on ST RM0385 (No HAL, No LL, zero third-party dependencies).
+* **Smooth 60 FPS Tear-Free Video:** Eliminates horizontal screen tearing using hardware Double Buffering synchronized to the LTDC Vertical Blanking Reload (`LTDC_SRCR.VBR`).
+* **0% CPU Load During Playback:** Delegates frame blitting and RGB565 memory copies to the DMA2D Chrom-ART engine, dropping CPU usage from 85% to 0%.
+* **High-Throughput SDMMC SDHC Driver:** Custom SDMMC driver operating in 4-bit bus mode @ 48 MHz with 512-byte LBA block addressing and ChaN FatFs (FAT32), reaching 18 MB/s read speed.
+* **Over-Drive 216 MHz Clock Tree:** Full 7-step hardware handshake to configure HSE, Main PLL, Over-Drive mode, and 6 Flash Wait States with ART Accelerator.
+* **FMC 8MB SDRAM Initialization:** Complete 5-step JEDEC sequence to initialize ISSI IS42S16400J SDRAM at 108 MHz for display framebuffers.
+* **Host Video Converter Tool:** Python and FFmpeg script included to transcode MP4/AVI videos into raw binary stream formats ready for SD card playback.
 
 ---
 
-## Clock Tree & Over-Drive Mode (216 MHz)
+## ⚙️ Requirements
 
-Achieving the maximum rated 216 MHz system frequency on STM32F746 requires a precise 7-step hardware handshake:
+* **Toolchain:** GNU Arm Embedded Toolchain (`arm-none-eabi-gcc`), GNU Make or PowerShell
+* **Host Utility:** Python 3.x with OpenCV / FFmpeg (for video conversion)
+* **Hardware Components:**
+  * **STM32F746G-Discovery Board:** STM32F746NGH6 MCU with 4.3" 480x272 capacitive touch LCD.
+  * **MicroSD Card:** Class 10 / UHS-I SDHC card (4GB to 32GB), formatted as FAT32.
+  * **Mini-USB Cable:** For ST-LINK flashing and power supply.
 
-```text
-External HSE Crystal = 25 MHz
-Main PLL:
-  - PLLM = 25 -> f_VCO_in = 1.0 MHz (Matches RM0385 requirement: 1 - 2 MHz)
-  - PLLN = 432 -> f_VCO_out = 432 MHz
-  - PLLP = 2 -> f_SYSCLK = 432 / 2 = 216 MHz
-  - PLLQ = 9 -> f_SDMMC = 432 / 9 = 48 MHz (Clock source for 48MHz SDMMC)
+---
 
-Hardware Handshake Sequence:
-1. Enable HSE and wait for HSERDY in RCC_CR.
-2. Configure Power Scale 1 (PWR_CR1.VOS = 0b11).
-3. Activate Over-Drive Mode (Set PWR_CR1.ODEN, poll ODENRDY, set ODSWEN, poll ODSWRDY).
-4. Configure Flash Latency: 6 Wait States (7 CPU cycles) + ART Accelerator Enable.
-5. Set Prescalers: AHB = /1 (216MHz), APB1 = /4 (54MHz), APB2 = /2 (108MHz).
-6. Enable Main PLL and wait for PLLRDY.
-7. Switch System Clock to PLL (RCC_CFGR.SW = 0b10) and verify SWS.
+## 🔌 Hardware Connections
+
+All peripherals are on-board the STM32F746G-Discovery kit:
+
+| Peripheral | Subsystem Signal | STM32F746 Pinout | Description |
+| :--- | :--- | :--- | :--- |
+| **FMC SDRAM** | Data Lines D0..D15 | **PD0..1, PD8..10, PD14..15, PE0..1, PE7..15** | 16-bit Parallel Memory Bus |
+| | Address Lines A0..A11 | **PF0..5, PF12..15, PG0..1** | Multiplexed Row/Column Address |
+| | Control (CLK, NBL0..1, RAS, CAS, WE) | **PG8, PE0..1, PF11, PG15, PD5** | SDRAM Timing & Byte Enables |
+| **LTDC LCD** | 24-bit RGB Signals | **PI15, PJ0..15, PK0..7** | Parallel RGB Video Stream |
+| | LCD_CLK, HSYNC, VSYNC, DE | **PI14, PI10, PI9, PK7** | 9.71 MHz Pixel Clock & Sync |
+| | Backlight PWM | **PK3** | Display Backlight Enable |
+| **SDMMC1** | Data D0..D3 | **PC8, PC9, PC10, PC11** | 4-bit High-Speed Data Bus |
+| | Clock & Command | **PC12 (CLK), PD2 (CMD)** | 48 MHz Clock & Command Line |
+| | Card Detect | **PC13** | Low = Card Inserted |
+
+---
+
+## 🚀 Getting Started
+
+### 1. Clone this repository
+
+```bash
+git clone https://github.com/HuynhTran112/stm32f7-baremetal-tft-sdhc.git
+cd stm32f7-baremetal-tft-sdhc
+```
+
+### 2. Build the firmware
+
+```bash
+# Compile using make
+make -j8
+
+# Or build using the automated PowerShell script on Windows
+.\build.ps1
+```
+
+### 3. Flash to STM32F746G-Discovery
+
+Flash the compiled binary `tft_video_f7.bin` or `tft_video_f7.hex` using STM32CubeProgrammer or OpenOCD via on-board ST-LINK:
+
+```bash
+STM32_Programmer_CLI -c port=SWD -w tft_video_f7.bin 0x08000000 -v -rst
+```
+
+### 4. Prepare video files on MicroSD
+
+Use the included Python converter script to prepare raw 480x272 RGB565 video binaries:
+
+```bash
+# Convert any MP4/AVI clip to 60 FPS raw stream
+python tools/convert_video.py --input sample.mp4 --output car1.BIN
+
+# Copy car1.BIN to the root directory of your FAT32-formatted MicroSD card
+# Insert into the STM32F746G-DISCO slot and press the Reset button (Black)
 ```
 
 ---
 
-## External Memory Subsystem (FMC SDRAM 8MB)
+## 🔄 System Behavior & Workflow
 
-The board integrates an **ISSI IS42S16400J** 64-Mbit (8MB) SDRAM wired via a 16-bit bus on FMC Bank 1 (`0xC0000000`):
+The media engine streams video directly from storage to display without buffer stalling:
 
-```text
-SDRAM Clock = f_HCLK / 2 = 216 MHz / 2 = 108 MHz (Clock period t_CK = 9.26 ns)
-Memory Geometry: 4 Banks x 4096 Rows x 256 Columns x 16 bits = 8 MBytes
-
-JEDEC 5-Step Power-Up Sequence (FMC_SDCMR):
-1. Clock Configuration Enable: Issue command Mode 0b001 to Bank 1.
-2. Precharge All: Issue command Mode 0b010.
-3. Auto-Refresh: Issue command Mode 0b011 with 8 consecutive refresh cycles.
-4. Load Mode Register: Issue command Mode 0b100 (CAS Latency = 2, Burst Length = 1).
-5. Set Refresh Rate Counter: SDRTR = 683 (Refresh period 64ms across 4096 rows @ 108MHz).
+```mermaid
+flowchart TD
+    SDCard[MicroSD SDHC FAT32] -->|4-bit SDMMC 48MHz| FIFO[SDMMC Hardware FIFO]
+    FIFO -->|18 MB/s Sector Burst| FatFs[ChaN FatFs Buffer]
+    
+    FatFs -->|Non-cacheable DMA Write| BackBuffer[SDRAM Back Buffer: 0xC0040000]
+    
+    BackBuffer -->|DMA2D Chrom-ART 0% CPU| Blit[Pixel Copy & Format Verification]
+    
+    Blit --> VSyncCheck{Electron Beam in VSYNC Period?}
+    VSyncCheck -- Chờ --> VSyncCheck
+    VSyncCheck -- Đạt --> VBR[Ghi cờ LTDC_SRCR.VBR: Đổi Buffer tức thì]
+    
+    VBR --> FrontBuffer[SDRAM Front Buffer: 0xC0000000]
+    FrontBuffer -->|LTDC 9.71MHz Pixel Clock| LCD[Màn hình TFT 480x272 @ 60 FPS]
 ```
 
 ---
 
-## Display Subsystem (LTDC & DMA2D Chrom-ART)
-
-### LTDC Timing Parameters for RK043FN48H (480x272 @ 60 Hz)
-* **Pixel Clock (LCD_CLK):** $9.71\text{ MHz}$ derived from PLLSAI ($f_{VCO} = 192\text{ MHz}$, $PLLSAIR = 5$, $DIV = 4$).
-* **Horizontal Timing:** Active: 480, HSync: 41, HBP: 13, HFP: 32 (Total = 566).
-* **Vertical Timing:** Active: 272, VSync: 10, VBP: 2, VFP: 2 (Total = 286).
-* **Frame Rate:** $9,710,000 / (566 \times 286) \approx 60.01\text{ FPS}$.
-
-### Hardware Double Buffering & Tear-Free VSYNC Reload
-```text
-Step 1: LTDC displays from Front Buffer (0xC0000000).
-Step 2: SDMMC + DMA2D unpacks next video frame into Back Buffer (0xC0040000).
-Step 3: Update LTDC Layer 1 Frame Address register:
-        LTDC_Layer1->CFBAR = (uint32_t)Back_Buffer;
-Step 4: Request Vertical Blanking Reload:
-        LTDC->SRCR = LTDC_SRCR_VBR;
-Step 5: LTDC hardware atomically swaps buffers only when the electron beam enters the Vertical Blanking zone.
-Result: Complete elimination of horizontal tearing artifacts.
-```
-
----
-
-## Storage Subsystem (SDMMC & ChaN FatFs)
-
-* **Bus Topology:** 4-bit parallel data lines (`SDMMC_D0..D3`) + Clock (`SDMMC_CK`) + Command (`SDMMC_CMD`).
-* **Clock Frequency:** Initialized at $400\text{ kHz}$ during identification, stepped up to $48\text{ MHz}$ in Data Transfer mode.
-* **SDHC Support:** Block Addressing (Logical Block Address - LBA) using fixed 512-byte sectors.
-* **Driver Architecture:** Low-level disk I/O interface (`diskio.c`) wired to official ChaN FatFs `ff.c` (FAT32 filesystem module).
-
----
-
-## ARM Cortex-M7 L1 D-Cache Coherency
-
-The ARM Cortex-M7 core features a 16KB L1 Data Cache with write-back policy. When DMA2D or SDMMC modifies RAM directly, the CPU cache might become stale:
-
-1. **Display Framebuffers:** Configured as Write-Through or Non-Cacheable via ARM Cortex-M MPU (Memory Protection Unit) region 0.
-2. **SDMMC DMA Read Buffers:** Before passing DMA-transferred sectors to FatFs, software calls:
-   ```c
-   SCB_InvalidateDCache_by_Addr((uint32_t *)read_buffer, buffer_size);
-   ```
-   This discards stale cache lines and forces the CPU to fetch fresh video frames directly from physical SDRAM.
-
----
-
-## Project Directory Layout
+## 🗂️ Project Structure
 
 ```text
 stm32f7-baremetal-tft-sdhc/
 ├── Inc/
-│   ├── reg.h                  # Absolute Memory-Mapped Register Definitions
-│   ├── sys_clock.h            # 216 MHz Over-Drive & PLL Initializer
-│   ├── sdram.h                # FMC 8MB SDRAM Driver Interface
-│   ├── ltdc.h                 # LTDC 480x272 Controller
-│   ├── dma2d.h                # DMA2D Chrom-ART Blitting Engine
-│   ├── sdmmc.h                # SDMMC 4-bit 48MHz Driver
-│   ├── diskio.h               # ChaN FatFs Disk I/O Wrapper
-│   ├── ff.h                   # ChaN FatFs Configuration Header
-│   └── media_player.h         # Video Frame Sequencing Engine
+│   ├── reg.h                   # Memory-mapped register definitions (RM0385)
+│   ├── sys_clock.h             # 216 MHz Over-Drive clock configuration
+│   ├── sdram.h                 # FMC SDRAM initialization & address mapping
+│   ├── ltdc.h                  # 480x272 panel timing & layer setup
+│   ├── dma2d.h                 # Chrom-ART hardware blitting engine
+│   ├── sdmmc.h                 # 4-bit 48MHz SDMMC driver
+│   ├── diskio.h                # Low-level disk I/O interface for FatFs
+│   ├── ff.h                    # ChaN FatFs core header
+│   └── media_player.h          # 60 FPS frame playback pipeline
 ├── Src/
-│   ├── main.c                 # Application entry point & Super-Loop
-│   ├── sys_clock.c            # PLL, Over-Drive, Flash Latency Handshake
-│   ├── sdram.c                # 5-step JEDEC FMC Initialization
-│   ├── ltdc.c                 # Video Timing, Layer 1 RGB565 Configuration
-│   ├── dma2d.c                # Chrom-ART Blitting Routines
-│   ├── sdmmc.c                # SDMMC Command & FIFO State Machine
-│   ├── diskio.c               # FatFs Sector Read/Write Bridge
-│   ├── ff.c                   # ChaN FatFs Core Module
-│   └── media_player.c         # Video Streaming Pipeline
-├── tools/                     # Host-side video conversion utilities
-│   └── video_converter.py     # Python script to convert MP4 to raw RGB565 .BIN
-├── build.ps1                  # Automated PowerShell build script (arm-none-eabi)
-├── Makefile                   # GNU Make build recipe
-├── STM32F746NGHx_FLASH.ld     # GCC Linker Script
+│   ├── main.c                  # System setup & main playback loop
+│   ├── sys_clock.c             # PLL, Over-Drive, and Flash wait states
+│   ├── sdram.c                 # JEDEC 5-step FMC SDRAM initialization
+│   ├── ltdc.c                  # Video timing generator & VBR swapping
+│   ├── dma2d.c                 # 2D memory copy routines
+│   ├── sdmmc.c                 # SDMMC commands, clock scaling & FIFO reads
+│   ├── diskio.c                # Hardware bridge to FatFs
+│   ├── ff.c                    # ChaN FatFs FAT32 implementation
+│   └── media_player.c          # Frame streaming state machine
+├── Startup/
+│   └── startup_stm32f746nghx.s # Cortex-M7 vector table & reset handler
+├── tools/
+│   └── convert_video.py        # Python video transcoder utility
+├── build.ps1                   # Automated build & clean script
+├── Makefile                    # GNU Make recipe
+├── STM32F746NGHX_FLASH.ld      # GCC linker script
 └── README.md
 ```
 
 ---
 
-## Building, Flashing & Video Conversion Tool
+## 🛡️ System Protection
 
-### 1. Build Firmware (GNU Arm Embedded Toolchain)
-
-```bash
-# Clone the repository
-git clone https://github.com/HuynhTran112/stm32f7-baremetal-tft-sdhc.git
-cd stm32f7-baremetal-tft-sdhc
-
-# Compile project using make
-make -j8
-
-# Or build using the automated PowerShell script
-.\build.ps1
-```
-
-### 2. Prepare Video Files on MicroSD Card
-
-Raw RGB565 frames ($480 \times 272 \times 2\text{ bytes} = 261,120\text{ bytes/frame}$) are pre-processed using the included Python utility:
-
-```bash
-# Convert your favorite MP4 clip to compatible binary stream
-python tools/video_converter.py --input sample_video.mp4 --output car1.BIN --fps 60
-
-# Copy car1.BIN to the root directory of a FAT32-formatted MicroSD card
-# Insert MicroSD into STM32F746G-DISCO slot and press Reset (Black Button)
-```
+* **L1 D-Cache Coherency:** Uses ARM Cortex-M7 MPU regions to mark display framebuffers as Non-Cacheable, preventing cache stale-data visual glitches.
+* **Storage Invalidation:** Executes `SCB_InvalidateDCache_by_Addr()` across sector buffers before FatFs processing.
+* **Tear-Free Double Buffering:** Atomic buffer pointer swapping restricted to vertical blanking intervals prevents horizontal screen tearing.
+* **Bus Timeout Supervision:** SDMMC transactions are protected by hardware data timeout counters (`SDMMC_DTIMER`) to prevent permanent lockup on bad SD sectors.
 
 ---
 
-## Author Information
+## 👥 Author Information
 
-* **Tran Huynh** - Embedded Systems & Firmware Engineer
-* **Email:** huynhtran30112004@gmail.com
+* **Author:** Trần Huỳnh
+* **Major:** Computer Engineering Technology
+* **Faculty:** Faculty of Electrical and Electronics Engineering (FEEE)
+* **Institution:** Ho Chi Minh City University of Technology and Education (HCMUTE)
+* **Email:** [huynhtran30112004@gmail.com](mailto:huynhtran30112004@gmail.com)
 * **GitHub:** [HuynhTran112](https://github.com/HuynhTran112)
-* **LinkedIn:** [Tran Huynh](https://linkedin.com)
