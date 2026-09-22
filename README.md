@@ -3,7 +3,7 @@
 [![Target MCU](https://img.shields.io/badge/MCU-STM32F746NG%20(Cortex--M7%20%40%20216MHz)-red.svg)](https://www.st.com/en/microcontrollers-microprocessors/stm32f746ng.html)
 [![Firmware Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#-key-features)
 [![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#️-requirements)
-[![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2024MHz)-purple.svg)](#️-requirements)
+[![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz%20Bypass)-purple.svg)](#️-requirements)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
 A multimedia player and storage engine written in **100% Bare-Metal C targeting hardware registers directly (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion RGB565 video directly from a **FAT32 MicroSD SDHC card** into the LCD framebuffer at a steady **60 FPS** with tear-free double buffering (LTDC Vertical Blanking Reload), and comes with an on-device file browser, live FPS overlay, and a graphics demo fallback mode.
@@ -42,7 +42,7 @@ System Core Clock  : 216 MHz Over-Drive (HSE 25MHz -> PLL 432MHz / 2)
 Flash Configuration: 7 Wait States, Prefetch + ART Accelerator ON
 FMC SDRAM Bus      : 8 MB (IS42S16400J) @ 108 MHz, 16-bit Parallel Bus
 LTDC Video Engine  : 480x272 Active RGB565 @ 60 FPS (Pixel Clock ~9.6 MHz)
-Storage Subsystem  : MicroSD SDHC (4-bit SDMMC1 Bus @ 24 MHz, FAT32 FatFs, Read-Only)
+Storage Subsystem  : MicroSD SDHC (4-bit SDMMC1 Bus @ 48 MHz Bypass Mode, FAT32 FatFs, Read-Only)
 Frame Path         : CMD18 Multi-Block burst read -> SDRAM back buffer (direct, no DMA2D)
 Display Quality    : Tear-Free via LTDC_SRCR.VBR (Vertical Blanking Reload)
 ========================================================================
@@ -54,7 +54,7 @@ Display Quality    : Tear-Free via LTDC_SRCR.VBR (Vertical Blanking Reload)
 
 * **100% Bare-Metal Register Programming:** Implemented entirely from scratch by manipulating memory-mapped I/O registers based on ST RM0385 (No HAL, No LL, zero third-party dependencies).
 * **Smooth 60 FPS Tear-Free Video:** Eliminates horizontal screen tearing using hardware double buffering synchronized to the LTDC Vertical Blanking Reload (`LTDC_SRCR.VBR`), swapped only between full frame reads.
-* **High-Throughput SDMMC SDHC Driver:** Custom SDMMC1 driver in 4-bit bus mode @ 24 MHz using `CMD18` (`READ_MULTIPLE_BLOCK`) multi-sector burst streaming with 512-byte LBA block addressing, feeding ChaN FatFs (FAT32).
+* **High-Throughput SDMMC SDHC Driver:** Custom SDMMC1 driver in 4-bit bus mode with the clock divider bypassed (`BYPASS=1` in `SDMMC_CLKCR`, running the bus directly off the 48 MHz `PLL48CLK`) using `CMD18` (`READ_MULTIPLE_BLOCK`) multi-sector burst streaming with 512-byte LBA block addressing, feeding ChaN FatFs (FAT32).
 * **DMA2D Chrom-ART for UI Graphics:** All on-screen UI — splash screen, file menu, FPS overlay, graphics demo — is drawn with hardware-accelerated `DMA2D_FillRect`/`DMA2D_CopyRect` instead of CPU pixel loops.
 * **On-Device File Browser & Auto-Play:** Scans the SD card root for `.BIN`/`.RAW` files and lets the user pick one with the on-board User Button, with a visual countdown auto-play fallback (see [On-Screen UI & Controls](#️-on-screen-ui--controls)).
 * **Live FPS Overlay & Auto-Loop:** Measures actual achieved frame rate in real time and renders it on-screen during playback; video loops automatically on EOF.
@@ -87,7 +87,7 @@ Quantitative figures measured on the physical STM32F746G-DISCO board:
 | :--- | :--- | :--- |
 | **Video Playback Frame Rate** | **~60 FPS** | On-screen FPS counter, averaged every 500 ms |
 | **SDMMC 4-bit Read Throughput** | **~18 MB/s** | `CMD18` sequential burst read of 512-byte sectors from SDHC |
-| **SDMMC Bus Clock** | **24 MHz** | 4-bit wide bus (`CLKDIV=0`, `WIDBUS=01b`) |
+| **SDMMC Bus Clock** | **48 MHz** | 4-bit wide bus, `BYPASS=1` (`WIDBUS=01b`, divider bypassed, clocked directly from `PLL48CLK`) |
 | **FMC SDRAM Transfer Bandwidth** | **216 MB/s (theoretical)** | 16-bit bus @ 108 MHz peak |
 | **Screen Tearing / Frame Drops** | **0 frames** | Buffer swap gated on `LTDC_SRCR.VBR`, observed over extended playback |
 | **Flash Wait States** | **7 WS** | `FLASH_ACR_LATENCY_7WS`, required for 216 MHz Scale-1 Over-Drive per RM0385 |
@@ -100,7 +100,7 @@ Quantitative figures measured on the physical STM32F746G-DISCO board:
 
 ```mermaid
 flowchart TD
-    SDCard[MicroSD SDHC FAT32] -->|4-bit SDMMC @ 24MHz, CMD18| FIFO[SDMMC1 FIFO, CPU-polled]
+    SDCard[MicroSD SDHC FAT32] -->|4-bit SDMMC @ 48MHz, CMD18| FIFO[SDMMC1 FIFO, CPU-polled]
     FIFO -->|FatFs f_read| BackBuffer[SDRAM Back Buffer]
 
     BackBuffer --> Overlay[DMA2D FillRect: FPS badge / UI]
@@ -144,7 +144,7 @@ All peripherals are on-board the STM32F746G-Discovery kit:
 | | LCD_CLK, HSYNC, VSYNC, DE | **PI14, PI10, PI9, PK7** | ~9.6 MHz Pixel Clock & Sync |
 | | LCD_DISP / Backlight | **PI12 / PK3** | Panel power-on & backlight enable (GPIO push-pull) |
 | **SDMMC1** | Data D0..D3 | **PC8, PC9, PC10, PC11** | 4-bit High-Speed Data Bus |
-| | Clock & Command | **PC12 (CLK), PD2 (CMD)** | 24 MHz Clock & Command Line |
+| | Clock & Command | **PC12 (CLK), PD2 (CMD)** | 48 MHz Clock & Command Line (bypass mode) |
 | **User Button** | Input | **PI11** | Menu navigation / play / stop |
 
 </details>
@@ -206,7 +206,7 @@ stm32f7-baremetal-tft-sdhc/
 │   ├── sdram.h                 # FMC SDRAM initialization & address mapping
 │   ├── ltdc.h                  # 480x272 panel timing & layer setup
 │   ├── dma2d.h                 # Chrom-ART hardware blitting engine
-│   ├── sdmmc.h                 # 4-bit 24MHz SDMMC driver
+│   ├── sdmmc.h                 # 4-bit 48MHz-bypass SDMMC driver
 │   ├── diskio.h                # Low-level disk I/O interface for FatFs
 │   ├── ff.h / ffconf.h / integer.h  # ChaN FatFs core headers & configuration
 │   ├── font8x8.h                # 8x8 bitmap font table for on-screen text
@@ -239,6 +239,7 @@ Documenting these honestly so the numbers in this README always match what's act
 
 * **Read-only filesystem:** `disk_write()` always returns `RES_WRPRT` — this build is playback-only by design, no write path is implemented.
 * **No DMA for SD transfers:** `SDMMC_ReadMultiBlocks()` polls `SDMMC1->STA`/`FIFO` from the CPU in a tight loop rather than using a DMA channel; the ~18 MB/s figure reflects this polled path, not a DMA-driven one.
+* **Stale in-code comment:** the line right above the 4-bit clock switch in `sdmmc.c` is labeled "Nâng xung nhịp lên 24 MHz" but the register value it writes sets `BYPASS=1`, which actually runs the bus at the full 48 MHz `PLL48CLK` — the comment text just wasn't updated after the bypass optimization was added. Worth a quick fix in the source so the next reader isn't misled the way this README briefly was.
 * **DMA2D is UI-only, not video-path:** Decoded frame bytes go straight from `f_read()` into the SDRAM back buffer; DMA2D currently accelerates only the solid-color menu/splash/overlay graphics, and its fill/copy calls are blocking (CPU waits on `DMA2D_ISR_TCIF`) rather than fire-and-forget.
 * **D-Cache is not enabled:** `CPU_Cache_Enable()` exists in `sys_clock.c` but is currently commented out, so no MPU non-cacheable region or `SCB_InvalidateDCache_by_Addr` calls are needed or present yet — cache-coherency handling is a planned addition, not a shipped feature.
 * **Fixed-format input:** frames must already be pre-converted to raw 480×272 RGB565 at the target frame rate; there is no on-device video decoding.
