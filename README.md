@@ -4,9 +4,10 @@
 [![Firmware Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#-key-features)
 [![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#️-requirements)
 [![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz%20Bypass)-purple.svg)](#️-requirements)
+[![Touch](https://img.shields.io/badge/Touch-FT5336%20Capacitive%20via%20I2C3-orange.svg)](#️-requirements)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
-A multimedia player and storage engine written in **100% Bare-Metal C targeting hardware registers directly (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion RGB565 video directly from a **FAT32 MicroSD SDHC card** into the LCD framebuffer at a steady **60 FPS** with tear-free double buffering (LTDC Vertical Blanking Reload), and comes with an on-device file browser, live FPS overlay, and a graphics demo fallback mode.
+A multimedia player and storage engine written in **100% Bare-Metal C targeting hardware registers directly (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion RGB565 video directly from a **FAT32 MicroSD SDHC card** into the LCD framebuffer at a steady **60 FPS** with tear-free, interrupt-driven double buffering (LTDC VBlank line interrupt), and comes with a capacitive touch UI, an on-device file browser, live FPS overlay, and a graphics demo fallback mode.
 
 ---
 
@@ -44,7 +45,10 @@ FMC SDRAM Bus      : 8 MB (IS42S16400J) @ 108 MHz, 16-bit Parallel Bus
 LTDC Video Engine  : 480x272 Active RGB565 @ 60 FPS (Pixel Clock ~9.6 MHz)
 Storage Subsystem  : MicroSD SDHC (4-bit SDMMC1 Bus @ 48 MHz Bypass Mode, FAT32 FatFs, Read-Only)
 Frame Path         : CMD18 Multi-Block burst read -> SDRAM back buffer (direct, no DMA2D)
-Display Quality    : Tear-Free via LTDC_SRCR.VBR (Vertical Blanking Reload)
+Cache & Memory     : L1 D-Cache ON, MPU marks 8MB SDRAM Non-Cacheable (no coherency hazard)
+Buffer Swap        : LTDC Line Interrupt (VBlank ISR) -> async swap, CPU sleeps via __WFI()
+Touch Input        : FT5336 Capacitive, I2C3 @ 100kHz (PH7/PH8), IRQ pin PI13
+Display Quality    : Tear-Free, Zero Screen-Tearing Observed
 ========================================================================
 ```
 
@@ -53,10 +57,13 @@ Display Quality    : Tear-Free via LTDC_SRCR.VBR (Vertical Blanking Reload)
 ## 📌 Key Features
 
 * **100% Bare-Metal Register Programming:** Implemented entirely from scratch by manipulating memory-mapped I/O registers based on ST RM0385 (No HAL, No LL, zero third-party dependencies).
-* **Smooth 60 FPS Tear-Free Video:** Eliminates horizontal screen tearing using hardware double buffering synchronized to the LTDC Vertical Blanking Reload (`LTDC_SRCR.VBR`), swapped only between full frame reads.
+* **Interrupt-Driven Tear-Free Video:** Buffer swap is triggered from the LTDC Line Interrupt (`LCD_TFT_IRQHandler`, fired at line 272) instead of a fixed software delay — the CPU issues `LTDC_RequestSwap_Async()` after decoding a frame, then sleeps via `__WFI()` until the ISR confirms the swap landed inside Vertical Blanking, eliminating horizontal screen tearing without busy-waiting.
+* **L1 D-Cache Enabled + MPU Non-Cacheable SDRAM:** The Cortex-M7 I/D-Cache is turned on for speed, while the MPU marks the entire 8MB SDRAM region (framebuffers included) as Non-Cacheable — sidestepping cache/DMA coherency hazards by design. A `SCB_InvalidateDCache_by_Addr()` call still runs defensively after each frame read.
+* **Capacitive Touch UI (FT5336 via I2C3):** Tap a file in the menu to play it directly, tap the on-screen seek bar during playback to jump to a position, tap center-screen to pause/resume, or tap the corner Exit button — all alongside the existing physical User Button.
 * **High-Throughput SDMMC SDHC Driver:** Custom SDMMC1 driver in 4-bit bus mode with the clock divider bypassed (`BYPASS=1` in `SDMMC_CLKCR`, running the bus directly off the 48 MHz `PLL48CLK`) using `CMD18` (`READ_MULTIPLE_BLOCK`) multi-sector burst streaming with 512-byte LBA block addressing, feeding ChaN FatFs (FAT32).
-* **DMA2D Chrom-ART for UI Graphics:** All on-screen UI — splash screen, file menu, FPS overlay, graphics demo — is drawn with hardware-accelerated `DMA2D_FillRect`/`DMA2D_CopyRect` instead of CPU pixel loops.
-* **On-Device File Browser & Auto-Play:** Scans the SD card root for `.BIN`/`.RAW` files and lets the user pick one with the on-board User Button, with a visual countdown auto-play fallback (see [On-Screen UI & Controls](#️-on-screen-ui--controls)).
+* **DMA2D Chrom-ART for UI Graphics:** All on-screen UI — splash screen, file menu, FPS overlay, seek bar, graphics demo — is drawn with hardware-accelerated `DMA2D_FillRect`/`DMA2D_CopyRect` instead of CPU pixel loops.
+* **SD Card Removal Fault Screen:** Distinguishes a genuine storage I/O error (`f_read()` returning non-`FR_OK`, e.g. card pulled mid-playback) from normal end-of-file, and shows a dedicated red fault screen instead of looping or hanging.
+* **On-Device File Browser & Auto-Play:** Scans the SD card root for `.BIN`/`.RAW` files and lets the user pick one via touch or the on-board User Button, with a visual countdown auto-play fallback (see [On-Screen UI & Controls](#️-on-screen-ui--controls)).
 * **Live FPS Overlay & Auto-Loop:** Measures actual achieved frame rate in real time and renders it on-screen during playback; video loops automatically on EOF.
 * **Built-in Bitmap Font Renderer:** Custom 8x8 pixel font (`font8x8.h`) rendered pixel-by-pixel to the framebuffer — no external font/graphics library.
 * **Graphics Demo Fallback:** If no card is present or no playable file is found, the firmware runs a self-contained animated color-bar + bouncing-sprite demo instead of hanging.
@@ -68,13 +75,14 @@ Display Quality    : Tear-Free via LTDC_SRCR.VBR (Vertical Blanking Reload)
 
 ## 🖥️ On-Screen UI & Controls
 
-The firmware is not just a raw frame dumper — it drives a small on-device UI using the single on-board User Button (PI11):
+The firmware drives a small on-device UI, controllable via **either** the physical User Button (PI11) **or** the FT5336 capacitive touch panel:
 
 | Screen | Behavior |
 | :--- | :--- |
 | **Splash / Boot** | Progress bar reflects SD mount status: fills **green** on successful mount, **yellow** if the card mounts but has no `.BIN`/`.RAW` files, **red** if no card / mount failure. |
-| **File Menu** | Lists up to `MAX_VIDEO_FILES` (8) detected video files with name and size. **Short click** = move to next file. **Hold button > 0.5 s** = play the selected file immediately. If left idle, the highlighted file **auto-plays after a 4-second countdown** shown on screen. |
-| **Playback** | Renders a live `FPS: xx | filename` badge in the top-left corner every frame. Button is debounced for the first 1.5 s of playback to avoid an accidental exit from the menu selection press; after that, a click returns to the file menu. Video loops automatically when the file ends. |
+| **File Menu** | Lists up to `MAX_VIDEO_FILES` (8) detected video files with name and size. **Short click** = move to next file, **hold button > 0.5 s** = play the selected file immediately — or just **tap a file directly on the touchscreen** to play it. If left idle, the highlighted file **auto-plays after a 4-second countdown** shown on screen. |
+| **Playback** | Renders a live `FPS: xx \| filename` badge in the top-left corner every frame. Tap the on-screen **seek bar** at the bottom to jump to a position (aligned to the nearest 512-byte sector); tap **center-screen** to pause/resume (shows a pause overlay); tap the corner **Exit** button, or click the physical button (after a 1.5 s debounce window), to return to the file menu. Video loops automatically when the file ends. |
+| **SD Card Removed / Read Error** | If `f_read()` reports a real I/O error (not just end-of-file) — e.g. the card was pulled mid-playback — the firmware stops immediately and shows a dedicated red fault screen instead of looping or hanging. Press the button to return to the boot sequence. |
 | **Graphics Demo** | Runs automatically when no card/video is available: animated color bars plus a bouncing sprite, drawn entirely with DMA2D. Button press exits back to the boot sequence. |
 
 ---
@@ -92,7 +100,7 @@ Quantitative figures measured on the physical STM32F746G-DISCO board:
 | **Screen Tearing / Frame Drops** | **0 frames** | Buffer swap gated on `LTDC_SRCR.VBR`, observed over extended playback |
 | **Flash Wait States** | **7 WS** | `FLASH_ACR_LATENCY_7WS`, required for 216 MHz Scale-1 Over-Drive per RM0385 |
 
-> Notes on measurement honesty: SD card reads are CPU-polled against the `SDMMC1->FIFO` register (no DMA channel is used for SDMMC), and DMA2D is used only for solid-color UI graphics (menu, splash, FPS badge, demo sprite) — decoded video frame data is read directly from the SD card into the SDRAM back buffer via FatFs and is **not** routed through DMA2D. See [Current Limitations & Roadmap](#️-current-limitations--roadmap).
+> Notes on measurement honesty: SD card reads are CPU-polled against the `SDMMC1->FIFO` register (no DMA channel is used for SDMMC), and DMA2D is used only for solid-color UI graphics (menu, splash, FPS badge, seek bar) — decoded video frame data is read directly from the SD card into the SDRAM back buffer via FatFs and is **not** routed through DMA2D, even though a `DMA2D_CopyFrame()` helper now exists in `dma2d.c` (unused in the current build). See [Current Limitations & Roadmap](#️-current-limitations--roadmap).
 
 ---
 
@@ -101,14 +109,16 @@ Quantitative figures measured on the physical STM32F746G-DISCO board:
 ```mermaid
 flowchart TD
     SDCard[MicroSD SDHC FAT32] -->|4-bit SDMMC @ 48MHz, CMD18| FIFO[SDMMC1 FIFO, CPU-polled]
-    FIFO -->|FatFs f_read| BackBuffer[SDRAM Back Buffer]
+    FIFO -->|FatFs f_read| BackBuffer[SDRAM Back Buffer, Non-Cacheable via MPU]
+    FIFO -.->|read error, not EOF| FaultScreen[Red Fault Screen: SD Card Removed]
 
-    BackBuffer --> Overlay[DMA2D FillRect: FPS badge / UI]
-    Overlay --> VBR[LTDC_SRCR.VBR: buffer swap on next VBLANK]
-
-    VBR --> FrontBuffer[SDRAM Front Buffer - now scanned out]
+    BackBuffer --> Overlay[DMA2D FillRect: FPS badge / seek bar / UI]
+    Overlay --> Req[LTDC_RequestSwap_Async]
+    Req -->|__WFI sleep| ISR[LCD_TFT_IRQHandler: Line Interrupt @ line 272]
+    ISR --> FrontBuffer[SDRAM Front Buffer - now scanned out]
     FrontBuffer -->|LTDC ~9.6MHz Pixel Clock| LCD[TFT LCD 480x272 @ 60 FPS]
 
+    Touch[FT5336 Touch, I2C3] -->|tap file / seek bar / pause / exit| Overlay
     Button[User Button PI11] -->|short click| Menu[File Menu / Next File]
     Button -->|hold > 0.5s| BackBuffer
 ```
@@ -145,6 +155,8 @@ All peripherals are on-board the STM32F746G-Discovery kit:
 | | LCD_DISP / Backlight | **PI12 / PK3** | Panel power-on & backlight enable (GPIO push-pull) |
 | **SDMMC1** | Data D0..D3 | **PC8, PC9, PC10, PC11** | 4-bit High-Speed Data Bus |
 | | Clock & Command | **PC12 (CLK), PD2 (CMD)** | 48 MHz Clock & Command Line (bypass mode) |
+| **Touch (I2C3)** | SCL / SDA | **PH7 / PH8** | Alternate Function AF4, Open-Drain, 100 kHz Standard Mode |
+| | Interrupt | **PI13 (TS_INT)** | FT5336 touch-ready interrupt line |
 | **User Button** | Input | **PI11** | Menu navigation / play / stop |
 
 </details>
@@ -207,6 +219,7 @@ stm32f7-baremetal-tft-sdhc/
 │   ├── ltdc.h                  # 480x272 panel timing & layer setup
 │   ├── dma2d.h                 # Chrom-ART hardware blitting engine
 │   ├── sdmmc.h                 # 4-bit 48MHz-bypass SDMMC driver
+│   ├── touchscreen.h            # FT5336 capacitive touch driver (I2C3)
 │   ├── diskio.h                # Low-level disk I/O interface for FatFs
 │   ├── ff.h / ffconf.h / integer.h  # ChaN FatFs core headers & configuration
 │   ├── font8x8.h                # 8x8 bitmap font table for on-screen text
@@ -218,6 +231,7 @@ stm32f7-baremetal-tft-sdhc/
 │   ├── ltdc.c                  # Video timing generator & VBR buffer swapping
 │   ├── dma2d.c                 # DMA2D fill/copy routines used for UI graphics
 │   ├── sdmmc.c                 # SDMMC commands, clock scaling & FIFO reads
+│   ├── touchscreen.c            # FT5336 I2C3 driver: init, coordinate read, gesture mapping
 │   ├── diskio.c                # Hardware bridge to FatFs (read-only)
 │   ├── ff.c                    # ChaN FatFs FAT32 implementation
 │   └── media_player.c          # File scan, on-device menu UI & frame streaming
@@ -239,12 +253,12 @@ Documenting these honestly so the numbers in this README always match what's act
 
 * **Read-only filesystem:** `disk_write()` always returns `RES_WRPRT` — this build is playback-only by design, no write path is implemented.
 * **No DMA for SD transfers:** `SDMMC_ReadMultiBlocks()` polls `SDMMC1->STA`/`FIFO` from the CPU in a tight loop rather than using a DMA channel; the ~18 MB/s figure reflects this polled path, not a DMA-driven one.
-* **Stale in-code comment:** the line right above the 4-bit clock switch in `sdmmc.c` is labeled "Nâng xung nhịp lên 24 MHz" but the register value it writes sets `BYPASS=1`, which actually runs the bus at the full 48 MHz `PLL48CLK` — the comment text just wasn't updated after the bypass optimization was added. Worth a quick fix in the source so the next reader isn't misled the way this README briefly was.
-* **DMA2D is UI-only, not video-path:** Decoded frame bytes go straight from `f_read()` into the SDRAM back buffer; DMA2D currently accelerates only the solid-color menu/splash/overlay graphics, and its fill/copy calls are blocking (CPU waits on `DMA2D_ISR_TCIF`) rather than fire-and-forget.
-* **D-Cache is not enabled:** `CPU_Cache_Enable()` exists in `sys_clock.c` but is currently commented out, so no MPU non-cacheable region or `SCB_InvalidateDCache_by_Addr` calls are needed or present yet — cache-coherency handling is a planned addition, not a shipped feature.
+* **Stale in-code comment:** the line right above the 4-bit clock switch in `sdmmc.c` is labeled "Nâng xung nhịp lên 24 MHz" but the register value it writes sets `BYPASS=1`, which actually runs the bus at the full 48 MHz `PLL48CLK` — the comment text just wasn't updated after the bypass optimization was added.
+* **`DMA2D_CopyFrame()` exists but is unused:** `dma2d.c` now has a frame-copy helper ready for a future DMA2D-accelerated video path, but the current playback loop still reads each frame straight from `f_read()` into the back buffer — this function isn't called anywhere yet.
+* **`Touch_Init()` doesn't actually gate on chip detection:** the function reads the FT5336 chip-ID register but always returns success regardless of the result, so a missing/faulty touch panel won't be reported — it just silently produces no touch events.
 * **Fixed-format input:** frames must already be pre-converted to raw 480×272 RGB565 at the target frame rate; there is no on-device video decoding.
 
-Planned next steps: DMA-driven SDMMC transfers to free the CPU during reads, DMA2D-accelerated frame blit with D-Cache + MPU non-cacheable framebuffer regions, and basic write support for on-device file management.
+Planned next steps: wire `DMA2D_CopyFrame()` into the playback path for a fully hardware-accelerated frame blit, DMA-driven SDMMC transfers to free the CPU during reads, make `Touch_Init()` report real failure so the UI can fall back to button-only mode, and basic write support for on-device file management.
 
 ---
 
