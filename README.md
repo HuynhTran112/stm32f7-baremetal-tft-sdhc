@@ -1,272 +1,303 @@
-# High-Performance 60 FPS Bare-Metal Video Player & SDHC Subsystem
+# Automotive CAN Telematics Gateway & Diagnostic Node
 
-[![Target MCU](https://img.shields.io/badge/MCU-STM32F746NG%20(Cortex--M7%20%40%20216MHz)-red.svg)](https://www.st.com/en/microcontrollers-microprocessors/stm32f746ng.html)
-[![Firmware Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#-key-features)
-[![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#️-requirements)
-[![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz%20Bypass)-purple.svg)](#️-requirements)
-[![Touch](https://img.shields.io/badge/Touch-FT5336%20Capacitive%20via%20I2C3-orange.svg)](#️-requirements)
+[![Node 1](https://img.shields.io/badge/Node%201-STM32F746NG%20(Cortex--M7%20%40%20216MHz)-red.svg)](#node-1-stm32f746ng-telematics-gateway)
+[![Node 2](https://img.shields.io/badge/Node%202-STM32F103C8T6%20(Cortex--M3%20%40%2072MHz)-orange.svg)](#node-2-stm32f103c8t6-ecu-simulator)
+[![RTOS](https://img.shields.io/badge/Node%201%20Firmware-Zephyr%20RTOS-blue.svg)](#node-1-stm32f746ng-telematics-gateway)
+[![Firmware](https://img.shields.io/badge/Node%202%20Firmware-100%25%20Bare--Metal-blue.svg)](#node-2-stm32f103c8t6-ecu-simulator)
+[![Protocol](https://img.shields.io/badge/Protocol-CAN%202.0B%20%2B%20AUTOSAR%20E2E%20Profile%201-green.svg)](#định-dạng-bản-tin-can-vector-dbc)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
-A multimedia player and storage engine written in **100% Bare-Metal C targeting hardware registers directly (RM0385)** on the **STM32F746G-Discovery** board. The system streams full-motion RGB565 video directly from a **FAT32 MicroSD SDHC card** into the LCD framebuffer at a steady **60 FPS** with tear-free, interrupt-driven double buffering (LTDC VBlank line interrupt), and comes with a capacitive touch UI, an on-device file browser, live FPS overlay, and a graphics demo fallback mode.
+Hệ thống gồm 2 vi điều khiển giao tiếp qua CAN Bus vật lý, tái hiện đúng kiến trúc mạng CAN trên ô tô thật: **Node 2** (STM32F103, bare-metal) đóng vai ECU động cơ/hộp số/phanh, liên tục phát dữ liệu cảm biến lên bus; **Node 1** (STM32F746, Zephyr RTOS) đóng vai Gateway/Cụm đồng hồ, thu nhận, giải mã và xác thực dữ liệu theo chuẩn AUTOSAR E2E Profile 1, đồng thời cung cấp giao diện chẩn đoán qua CLI.
 
 ---
 
-## 📑 Table of Contents
+## Mục Lục
 
-- [Demo & Playback Showcase](#-demo--playback-showcase)
-- [Key Features](#-key-features)
-- [On-Screen UI & Controls](#️-on-screen-ui--controls)
-- [Performance & Hardware Benchmarks](#-performance--hardware-benchmarks)
-- [System Behavior & Workflow](#-system-behavior--workflow)
-- [Requirements](#️-requirements)
-- [Hardware Connections](#-hardware-connections)
-- [Getting Started](#-getting-started)
-- [Project Structure](#️-project-structure)
-- [Current Limitations & Roadmap](#️-current-limitations--roadmap)
-- [Author Information](#-author-information)
-
----
-
-## 📷 Demo & Playback Showcase
-
-<p align="center">
-  <img src="docs/images/tft_player_hero.png" alt="60 FPS Bare-Metal Video Player Demo" width="650">
-</p>
-
-### Live Hardware Telemetry Banner
-
-```text
-========================================================================
-             STM32F746G BARE-METAL 60 FPS VIDEO PLAYER TELEMETRY
-========================================================================
-System Core Clock  : 216 MHz Over-Drive (HSE 25MHz -> PLL 432MHz / 2)
-Flash Configuration: 7 Wait States, Prefetch + ART Accelerator ON
-FMC SDRAM Bus      : 8 MB (IS42S16400J) @ 108 MHz, 16-bit Parallel Bus
-LTDC Video Engine  : 480x272 Active RGB565 @ 60 FPS (Pixel Clock ~9.6 MHz)
-Storage Subsystem  : MicroSD SDHC (4-bit SDMMC1 Bus @ 48 MHz Bypass Mode, FAT32 FatFs, Read-Only)
-Frame Path         : CMD18 Multi-Block burst read -> SDRAM back buffer (direct, no DMA2D)
-Cache & Memory     : L1 D-Cache ON, MPU marks 8MB SDRAM Non-Cacheable (no coherency hazard)
-Buffer Swap        : LTDC Line Interrupt (VBlank ISR) -> async swap, CPU sleeps via __WFI()
-Touch Input        : FT5336 Capacitive, I2C3 @ 100kHz (PH7/PH8), IRQ pin PI13
-Display Quality    : Tear-Free, Zero Screen-Tearing Observed
-========================================================================
-```
+- [Kiến Trúc Tổng Quan](#kiến-trúc-tổng-quan)
+- [Tính Năng Chính](#tính-năng-chính)
+- [Định Dạng Bản Tin CAN (Vector DBC)](#định-dạng-bản-tin-can-vector-dbc)
+- [Luồng Dữ Liệu End-to-End](#luồng-dữ-liệu-end-to-end)
+- [Yêu Cầu Phần Cứng](#yêu-cầu-phần-cứng)
+- [Sơ Đồ Đấu Dây](#sơ-đồ-đấu-dây)
+- [Bắt Đầu Nhanh](#bắt-đầu-nhanh)
+  - [Node 1: STM32F746NG Telematics Gateway](#node-1-stm32f746ng-telematics-gateway)
+  - [Node 2: STM32F103C8T6 ECU Simulator](#node-2-stm32f103c8t6-ecu-simulator)
+- [Bộ Lệnh Chẩn Đoán (Zephyr Shell CLI)](#bộ-lệnh-chẩn-đoán-zephyr-shell-cli)
+- [Demo](#demo)
+- [Cấu Trúc Thư Mục](#cấu-trúc-thư-mục)
+- [Giới Hạn Hiện Tại & Hướng Phát Triển](#giới-hạn-hiện-tại--hướng-phát-triển)
+- [Thông Tin Tác Giả](#thông-tin-tác-giả)
 
 ---
 
-## 📌 Key Features
-
-* **100% Bare-Metal Register Programming:** Implemented entirely from scratch by manipulating memory-mapped I/O registers based on ST RM0385 (No HAL, No LL, zero third-party dependencies).
-* **Interrupt-Driven Tear-Free Video:** Buffer swap is triggered from the LTDC Line Interrupt (`LCD_TFT_IRQHandler`, fired at line 272) instead of a fixed software delay — the CPU issues `LTDC_RequestSwap_Async()` after decoding a frame, then sleeps via `__WFI()` until the ISR confirms the swap landed inside Vertical Blanking, eliminating horizontal screen tearing without busy-waiting.
-* **L1 D-Cache Enabled + MPU Non-Cacheable SDRAM:** The Cortex-M7 I/D-Cache is turned on for speed, while the MPU marks the entire 8MB SDRAM region (framebuffers included) as Non-Cacheable — sidestepping cache/DMA coherency hazards by design. A `SCB_InvalidateDCache_by_Addr()` call still runs defensively after each frame read.
-* **Capacitive Touch UI (FT5336 via I2C3):** Tap a file in the menu to play it directly, tap the on-screen seek bar during playback to jump to a position, tap center-screen to pause/resume, or tap the corner Exit button — all alongside the existing physical User Button.
-* **High-Throughput SDMMC SDHC Driver:** Custom SDMMC1 driver in 4-bit bus mode with the clock divider bypassed (`BYPASS=1` in `SDMMC_CLKCR`, running the bus directly off the 48 MHz `PLL48CLK`) using `CMD18` (`READ_MULTIPLE_BLOCK`) multi-sector burst streaming with 512-byte LBA block addressing, feeding ChaN FatFs (FAT32).
-* **DMA2D Chrom-ART for UI Graphics:** All on-screen UI — splash screen, file menu, FPS overlay, seek bar, graphics demo — is drawn with hardware-accelerated `DMA2D_FillRect`/`DMA2D_CopyRect` instead of CPU pixel loops.
-* **SD Card Removal Fault Screen:** Distinguishes a genuine storage I/O error (`f_read()` returning non-`FR_OK`, e.g. card pulled mid-playback) from normal end-of-file, and shows a dedicated red fault screen instead of looping or hanging.
-* **On-Device File Browser & Auto-Play:** Scans the SD card root for `.BIN`/`.RAW` files and lets the user pick one via touch or the on-board User Button, with a visual countdown auto-play fallback (see [On-Screen UI & Controls](#️-on-screen-ui--controls)).
-* **Live FPS Overlay & Auto-Loop:** Measures actual achieved frame rate in real time and renders it on-screen during playback; video loops automatically on EOF.
-* **Built-in Bitmap Font Renderer:** Custom 8x8 pixel font (`font8x8.h`) rendered pixel-by-pixel to the framebuffer — no external font/graphics library.
-* **Graphics Demo Fallback:** If no card is present or no playable file is found, the firmware runs a self-contained animated color-bar + bouncing-sprite demo instead of hanging.
-* **Over-Drive 216 MHz Clock Tree:** Full hardware handshake to configure HSE, Main PLL, Over-Drive mode, and Flash wait states with ART Accelerator.
-* **FMC 8MB SDRAM Initialization:** JEDEC-sequence initialization of the ISSI IS42S16400J SDRAM at 108 MHz for the two frame buffers.
-* **Host Video Converter Tool:** Python/FFmpeg script to transcode MP4/AVI clips into raw RGB565 binary streams ready for SD playback.
-
----
-
-## 🖥️ On-Screen UI & Controls
-
-The firmware drives a small on-device UI, controllable via **either** the physical User Button (PI11) **or** the FT5336 capacitive touch panel:
-
-| Screen | Behavior |
-| :--- | :--- |
-| **Splash / Boot** | Progress bar reflects SD mount status: fills **green** on successful mount, **yellow** if the card mounts but has no `.BIN`/`.RAW` files, **red** if no card / mount failure. |
-| **File Menu** | Lists up to `MAX_VIDEO_FILES` (8) detected video files with name and size. **Short click** = move to next file, **hold button > 0.5 s** = play the selected file immediately — or just **tap a file directly on the touchscreen** to play it. If left idle, the highlighted file **auto-plays after a 4-second countdown** shown on screen. |
-| **Playback** | Renders a live `FPS: xx \| filename` badge in the top-left corner every frame. Tap the on-screen **seek bar** at the bottom to jump to a position (aligned to the nearest 512-byte sector); tap **center-screen** to pause/resume (shows a pause overlay); tap the corner **Exit** button, or click the physical button (after a 1.5 s debounce window), to return to the file menu. Video loops automatically when the file ends. |
-| **SD Card Removed / Read Error** | If `f_read()` reports a real I/O error (not just end-of-file) — e.g. the card was pulled mid-playback — the firmware stops immediately and shows a dedicated red fault screen instead of looping or hanging. Press the button to return to the boot sequence. |
-| **Graphics Demo** | Runs automatically when no card/video is available: animated color bars plus a bouncing sprite, drawn entirely with DMA2D. Button press exits back to the boot sequence. |
-
----
-
-## 📊 Performance & Hardware Benchmarks
-
-Quantitative figures measured on the physical STM32F746G-DISCO board:
-
-| Metric | Measured Value | Measurement Tool & Condition |
-| :--- | :--- | :--- |
-| **Video Playback Frame Rate** | **~60 FPS** | On-screen FPS counter, averaged every 500 ms |
-| **SDMMC 4-bit Read Throughput** | **~18 MB/s** | `CMD18` sequential burst read of 512-byte sectors from SDHC |
-| **SDMMC Bus Clock** | **48 MHz** | 4-bit wide bus, `BYPASS=1` (`WIDBUS=01b`, divider bypassed, clocked directly from `PLL48CLK`) |
-| **FMC SDRAM Transfer Bandwidth** | **216 MB/s (theoretical)** | 16-bit bus @ 108 MHz peak |
-| **Screen Tearing / Frame Drops** | **0 frames** | Buffer swap gated on `LTDC_SRCR.VBR`, observed over extended playback |
-| **Flash Wait States** | **7 WS** | `FLASH_ACR_LATENCY_7WS`, required for 216 MHz Scale-1 Over-Drive per RM0385 |
-
-> Notes on measurement honesty: SD card reads are CPU-polled against the `SDMMC1->FIFO` register (no DMA channel is used for SDMMC), and DMA2D is used only for solid-color UI graphics (menu, splash, FPS badge, seek bar) — decoded video frame data is read directly from the SD card into the SDRAM back buffer via FatFs and is **not** routed through DMA2D, even though a `DMA2D_CopyFrame()` helper now exists in `dma2d.c` (unused in the current build). See [Current Limitations & Roadmap](#️-current-limitations--roadmap).
-
----
-
-## 🔄 System Behavior & Workflow
+## Kiến Trúc Tổng Quan
 
 ```mermaid
-flowchart TD
-    SDCard[MicroSD SDHC FAT32] -->|4-bit SDMMC @ 48MHz, CMD18| FIFO[SDMMC1 FIFO, CPU-polled]
-    FIFO -->|FatFs f_read| BackBuffer[SDRAM Back Buffer, Non-Cacheable via MPU]
-    FIFO -.->|read error, not EOF| FaultScreen[Red Fault Screen: SD Card Removed]
+flowchart LR
+    subgraph B2["NODE 2: STM32F103C8T6"]
+        direction TB
+        S2["Cảm biến giả lập<br/>speed · rpm · gear · torque · brake"]
+        E2["DBC Encoder<br/>CRC-8 + Rolling Counter"]
+        M2["3x TX Mailbox"]
+        S2 --> E2 --> M2
+    end
 
-    BackBuffer --> Overlay[DMA2D FillRect: FPS badge / seek bar / UI]
-    Overlay --> Req[LTDC_RequestSwap_Async]
-    Req -->|__WFI sleep| ISR[LCD_TFT_IRQHandler: Line Interrupt @ line 272]
-    ISR --> FrontBuffer[SDRAM Front Buffer - now scanned out]
-    FrontBuffer -->|LTDC ~9.6MHz Pixel Clock| LCD[TFT LCD 480x272 @ 60 FPS]
+    M2 ==>|"CAN_H / CAN_L · 500 kbps"| BUS(("CAN Bus"))
+    BUS ==> F1
 
-    Touch[FT5336 Touch, I2C3] -->|tap file / seek bar / pause / exit| Overlay
-    Button[User Button PI11] -->|short click| Menu[File Menu / Next File]
-    Button -->|hold > 0.5s| BackBuffer
+    subgraph B1["NODE 1: STM32F746NG"]
+        direction TB
+        F1["Filter Bank<br/>0x120–0x127"] --> Q1[("k_msgq")]
+        Q1 --> W1["can_worker<br/>decode + E2E check"]
+        W1 --> D1[("telemetry<br/>+ DTC")]
+        D1 --> CLI1["Shell CLI"]
+    end
+
+    classDef node2 fill:#2d2d2d,stroke:#ff9800,color:#fff,stroke-width:2px
+    classDef node1 fill:#2d2d2d,stroke:#2196f3,color:#fff,stroke-width:2px
+    classDef bus fill:#1a1a1a,stroke:#4caf50,color:#4caf50,stroke-width:2px
+    class S2,E2,M2 node2
+    class F1,Q1,W1,D1,CLI1 node1
+    class BUS bus
 ```
 
----
-
-## ⚙️ Requirements
-
-* **Toolchain:** GNU Arm Embedded Toolchain (`arm-none-eabi-gcc`), GNU Make or PowerShell
-* **Host Utility:** Python 3.x with OpenCV / FFmpeg (for video conversion)
-* **Hardware Components:**
-  * **STM32F746G-Discovery Board:** STM32F746NGH6 MCU with 4.3" 480x272 capacitive touch LCD.
-  * **MicroSD Card:** SDHC card (4GB–32GB), formatted as FAT32, containing raw RGB565 `.BIN`/`.RAW` clips converted with the included tool.
-  * **Mini-USB Cable:** For ST-LINK flashing and power supply.
+Node 2 phát 3 bản tin CAN đa chu kỳ (20ms / 50ms / 100ms), đại diện cho 3 hệ thống con của xe: động cơ, hộp số và phanh. Node 1 thu nhận, giải mã theo chuẩn AUTOSAR E2E, giám sát an toàn và phản hồi qua Shell CLI. Hai đầu hệ thống là hai thái cực có chủ đích: lập trình bare-metal trực tiếp thanh ghi ở Node 2, và hệ điều hành Zephyr RTOS ở Node 1.
 
 ---
 
-## 🔌 Hardware Connections
+## Tính Năng Chính
 
-All peripherals are on-board the STM32F746G-Discovery kit:
+* **Mạng CAN 2 node độc lập:** 2 bo mạch vật lý tách biệt nối qua bus vi sai CAN_H/CAN_L bằng 2 IC Transceiver và điện trở đầu cuối 120Ω, kiểm chứng đúng tầng vật lý ISO 11898.
+* **3 bản tin CAN theo phân hệ ô tô:** `0x123` Engine (tốc độ, vòng tua, nhiệt độ nước), `0x124` Transmission (tay số, mô-men xoắn), `0x125` Chassis (áp lực phanh). Mỗi bản tin mang Rolling Counter độc lập, phát đồng thời qua 3 Mailbox phần cứng của bxCAN.
+* **Xác thực 2 lớp AUTOSAR E2E Profile 1:** CRC-8 (đa thức SAE J1850 `0x2F`, tính bằng bảng tra 256 phần tử) kết hợp Rolling Counter dạng delta (phân biệt khung lặp, rớt 1 khung hoặc rớt nhiều khung).
+* **Bộ lọc phần cứng theo dải ID:** 1 Filter Bank (`id=0x120, mask=0x7F8`) bao trọn 3 bản tin và dự phòng không gian cho các ECU mở rộng trong cùng dải ID.
+* **Giám sát an toàn thời gian thực (DTC):** Phát hiện quá nhiệt động cơ (>105°C gán `DTC_P0115`), quá vòng tua (>6500 RPM gán `DTC_P0219`), mất tín hiệu CAN quá 1000ms (`DTC_U0100`), dữ liệu sai lệch khi vi phạm E2E (CRC sai hoặc Replay) tích luỹ đủ 3 lần (`DTC_U0401`), nhấp nháy đèn cảnh báo PI1.
+* **Thống kê mạng thời gian thực:** Đếm tổng khung nhận, tỉ lệ hợp lệ E2E, số lỗi CRC, số khung rớt và lưu lượng riêng từng ID qua lệnh `can stat`.
+* **Bộ mô phỏng và chẩn đoán tích hợp trong Node 1:** `sim_thread` hỗ trợ phát dữ liệu xe chạy nội bộ; tập lệnh `can inject` (`overheat`, `overspeed`, `timeout`, `corrupt`, `replay`, `drop`) cho phép chủ động bơm lỗi ngay trong bộ giải mã để kiểm thử logic an toàn mà không cần thiết bị gây nhiễu thật.
+* **Chẩn đoán qua Zephyr Shell CLI:** Giao diện dòng lệnh tương tác qua UART (`vehicle status`, `dtc read/clear`, `can sim/auto/inject/stat/stat_reset`).
+* **Bảo vệ ngăn xếp bằng phần cứng MPU:** Sử dụng `CONFIG_HW_STACK_PROTECTION` và `CONFIG_MPU_STACK_GUARD` phát hiện lỗi tràn stack tức thì.
 
-<details>
-<summary><b>👉 Nhấn vào đây để xem chi tiết bảng kết nối chân phần cứng (Pinout)</b></summary>
+---
 
-### Pinout Table
+## Định Dạng Bản Tin CAN (Vector DBC)
 
-| Peripheral | Subsystem Signal | STM32F746 Pinout | Description |
+Cả 3 bản tin dùng chung định dạng Byte 0-1 (CRC-8 và Rolling Counter) theo chuẩn AUTOSAR E2E, khác nhau ở Byte 2-5 (payload tín hiệu):
+
+| Byte | `0x123`: Engine (MB0) | `0x124`: Transmission (MB1) | `0x125`: Chassis/Brake (MB2) |
 | :--- | :--- | :--- | :--- |
-| **FMC SDRAM** | Data Lines D0..D15 | **PD0..1, PD8..10, PD14..15, PE0..1, PE7..15** | 16-bit Parallel Memory Bus |
-| | Address Lines A0..A11 | **PF0..5, PF12..15, PG0..1** | Multiplexed Row/Column Address |
-| | Control (CLK, NBL0..1, RAS, CAS, WE) | **PG8, PE0..1, PF11, PG15, PD5** | SDRAM Timing & Byte Enables |
-| **LTDC LCD** | 24-bit RGB Signals | **PE4, PI15, PJ0..15, PK0..2, PK4..6, PG12** | Parallel RGB Video Stream (PG12 uses AF9, all others AF14) |
-| | LCD_CLK, HSYNC, VSYNC, DE | **PI14, PI10, PI9, PK7** | ~9.6 MHz Pixel Clock & Sync |
-| | LCD_DISP / Backlight | **PI12 / PK3** | Panel power-on & backlight enable (GPIO push-pull) |
-| **SDMMC1** | Data D0..D3 | **PC8, PC9, PC10, PC11** | 4-bit High-Speed Data Bus |
-| | Clock & Command | **PC12 (CLK), PD2 (CMD)** | 48 MHz Clock & Command Line (bypass mode) |
-| **Touch (I2C3)** | SCL / SDA | **PH7 / PH8** | Alternate Function AF4, Open-Drain, 100 kHz Standard Mode |
-| | Interrupt | **PI13 (TS_INT)** | FT5336 touch-ready interrupt line |
-| **User Button** | Input | **PI11** | Menu navigation / play / stop |
+| 0 | E2E CRC-8 (poly `0x2F`, seed `0xFF`, XOR-out `0xFF`, Data ID `0x1A2B`) | Giống cột trái | Giống cột trái |
+| 1 | Rolling Counter 4-bit (0-15, modulo 16, riêng từng ID) | Giống, bộ đếm độc lập | Giống, bộ đếm độc lập |
+| 2 | Vehicle Speed: 0-240 km/h, factor 1, Little-Endian | Gear Position: 1-5 | Brake Pressure: % |
+| 3-4 | Engine RPM: Little-Endian, factor 0.25 (`raw = d[3] \| (d[4]<<8)`, `RPM = raw>>2`) | Engine Torque (Nm): Little-Endian | Wheel Speed: Little-Endian |
+| 5 | Coolant Temp: `raw = temp + 40` | Oil Temp: `raw = temp + 40` | Pad Temp: `raw = temp + 40` |
+| 6-7 | Reserved `0x00` | Reserved `0x00` | Reserved `0x00` |
 
-</details>
+DLC = 8 bytes cho cả 3 bản tin; Chuẩn Standard ID 11-bit.
 
 ---
 
-## 🚀 Getting Started
+## Luồng Dữ Liệu End-to-End
 
-### 1. Clone this repository
-
-```bash
-git clone https://github.com/HuynhTran112/stm32f7-baremetal-tft-sdhc.git
-cd stm32f7-baremetal-tft-sdhc
-```
-
-### 2. Build the firmware
-
-```bash
-# Compile using make
-make -j8
-
-# Or build using the automated PowerShell script on Windows
-.\build.ps1
-```
-
-### 3. Flash to STM32F746G-Discovery
-
-Flash the compiled binary `tft_video_f7.bin` or `tft_video_f7.hex` using STM32CubeProgrammer or OpenOCD via on-board ST-LINK:
-
-```bash
-STM32_Programmer_CLI -c port=SWD -w tft_video_f7.bin 0x08000000 -v -rst
-```
-
-### 4. Prepare video files on MicroSD
-
-Use the included Python converter script to prepare raw 480x272 RGB565 video binaries:
-
-```bash
-# Convert any MP4/AVI clip to 60 FPS raw stream
-python tools/convert_video.py --input sample.mp4 --output car1.BIN
-
-# Copy up to 8 .BIN/.RAW files to the root directory of your FAT32-formatted MicroSD card
-# Insert into the STM32F746G-DISCO slot and press the Reset button (Black)
-```
-
-### 5. Use the on-device menu
-
-On boot, the firmware scans the card root and shows a file list. Short-click the User Button (PI11) to cycle files, hold it for over 0.5 s to play the highlighted one, or just wait — it auto-plays after a 4-second countdown. During playback, click the button (after the first 1.5 s) to return to the menu.
+1. **Node 2** định kỳ đọc cảm biến giả lập, đóng gói 3 bản tin, tính CRC-8 qua bảng tra và tăng Rolling Counter tương ứng.
+2. **`CAN1_Transmit()`** kiểm tra cờ `TME0/TME1/TME2`, chọn Mailbox phần cứng rảnh để nạp 3 khung gần như đồng thời mà không bị trễ luân phiên.
+3. Bus CAN phân xử theo cơ chế bitwise arbitration: bản tin `0x123` được ưu tiên truyền trước `0x124`, sau đó tới `0x125`.
+4. **Node 1** thu nhận qua Filter Bank dải `0x120-0x127`, nạp vào hàng đợi `k_msgq`.
+5. **`can_worker_thread`** (Priority 5) giải mã theo `can_id`, xác thực CRC-8 và delta counter, cập nhật cấu trúc `VehicleTelemetry_t`.
+6. **`safety_thread`** (Priority 6) chu kỳ 200ms kiểm tra ngưỡng vận hành, cập nhật cờ DTC và điều khiển LED cảnh báo (PI1).
+7. Người vận hành truy vấn trạng thái qua **Shell CLI** trên cổng UART.
 
 ---
 
-## 🗂️ Project Structure
+## Yêu Cầu Phần Cứng
+
+| Hạng mục | Node 1 (Gateway) | Node 2 (ECU Simulator) |
+| :--- | :--- | :--- |
+| **Bo mạch** | STM32F746G-Discovery | STM32F103C8T6 (Blue Pill) |
+| **Toolchain** | West + Zephyr SDK (`arm-zephyr-eabi-gcc`) | GCC Arm Toolchain (`arm-none-eabi-gcc`) hoặc Keil MDK |
+| **Module CAN Transceiver** | 1x Module (SN65HVD230 3.3V hoặc TJA1050 5V) | 1x Module (SN65HVD230 3.3V hoặc TJA1050 5V) |
+| **Nạp chương trình** | Cáp Mini-USB (ST-LINK on-board) | Mạch nạp ST-LINK V2 rời hoặc nạp qua UART bootloader |
+| **Kết nối vật lý** | Cáp xoắn đôi vi sai CAN_H/CAN_L, dây nối đất GND chung, 2 điện trở kết thúc 120Ω |
+
+---
+
+## Sơ Đồ Đấu Dây
+
+```mermaid
+flowchart LR
+    N1["NODE 1<br/>STM32F746G-Discovery<br/>PB9 TX · PB8 RX · PI0 STB"] --> T1["Transceiver 1<br/>SN65HVD230"]
+    T1 <==>|"CAN_H / CAN_L<br/>xoắn đôi + GND chung"| T2["Transceiver 2<br/>SN65HVD230"]
+    T2 --> N2["NODE 2<br/>STM32F103 Blue Pill<br/>PA12 TX · PA11 RX"]
+
+    R1["120Ω"] -.- T1
+    T2 -.- R2["120Ω"]
+```
+
+| Tín hiệu | Node 1 (F746) | Node 2 (F103) | Cả 2 Transceiver (SN65HVD230) |
+| :--- | :--- | :--- | :--- |
+| **TX → CTX** | PB9 (Header CN4, D14) | PA12 | CTX / TXD |
+| **CRX → RX** | PB8 (Header CN4, D15) | PA11 | CRX / RXD |
+| **STB / Rs** | PI0 kéo LOW (Header CN7, D5) | Nối thẳng GND | Rs / STB |
+| **VCC** | 3.3V (CN6) | 3.3V | 3V3 |
+| **GND** | Chung 1 điểm mass với Node 2 | Chung 1 điểm mass với Node 1 | GND |
+| **Bus** | — | — | CAN_H, CAN_L nối xoắn đôi giữa 2 module + 1 điện trở 120Ω mỗi đầu |
+
+**Ghi chú nhanh:**
+- Dùng **TJA1050 (5V)** thay vì SN65HVD230: cấp nguồn transceiver từ chân 5V — an toàn vì PB8 (F746) là chân 5V-tolerant.
+- Bật `USE_CAN_REMAP_PB8_PB9=1` trong firmware Node 2 nếu muốn đổi PA11/PA12 sang PB8/PB9.
+- LED cảnh báo PI1 (Node 1) và LED PC13 (Node 2) đều có sẵn trên board, không cần đấu thêm.
+
+**Kiểm tra nhanh trước khi cấp nguồn:**
+1. Đo GND giữa 2 board — phải ~0V (chênh lệch lớn có thể hỏng bộ thu do vượt dải Common-Mode).
+2. Tắt nguồn, đo trở kháng CAN_H↔CAN_L — phải trong khoảng **55-65Ω** (2 trở 120Ω song song). Đo ra ~120Ω nghĩa là thiếu 1 trở; đo hở mạch nghĩa là thiếu cả 2.
+
+---
+
+## Bắt Đầu Nhanh
+
+### Node 1: STM32F746NG Telematics Gateway
+
+```bash
+cd node1_stm32f7_gateway
+west build -b stm32f746g_disco .
+west flash
+```
+
+Mở terminal UART ở tốc độ 115200 baud để theo dõi log và nhập lệnh Shell. Mặc định firmware chạy ở `CAN_MODE_NORMAL` (giao tiếp qua chân PB8/PB9 thực tế). Khi muốn tự kiểm thử mà không có Node 2 thật:
+1. Thêm dòng `target_compile_definitions(app PRIVATE USE_CAN_LOOPBACK_MODE)` vào `CMakeLists.txt`, hoặc
+2. Bỏ chú thích dòng `/* loopback; */` trong file `app.overlay`.
+
+Sau đó gõ lệnh `can auto on` để luồng `sim_thread` kích hoạt dữ liệu mô phỏng.
+
+### Node 2: STM32F103C8T6 ECU Simulator
+
+```bash
+cd node2_stm32f103_ecu
+make            # Hoặc: cmake -B build && cmake --build build
+```
+
+Nạp file `stm32f103_node.bin` hoặc `.hex` qua ST-LINK V2 hoặc USB-TTL. Đèn LED PC13 chớp tắt đều đặn xác nhận chu kỳ phát đang diễn ra. Thư mục mã nguồn cũng cung cấp sẵn project `stm32f103_node.uvprojx` cho Keil MDK.
+
+**Kiểm thử liên lạc toàn hệ thống:**
+1. Cấp nguồn cho cả 2 node và kết nối đủ 3 đường CAN_H, CAN_L, GND.
+2. Trên console Shell của Node 1, nhập lệnh:
+   ```text
+   uart:~$ can stat
+   ```
+   Kiểm tra số đếm của 3 định danh `id_123_count`, `id_124_count`, `id_125_count` tăng đều với tần số 10 Hz và tỉ lệ hợp lệ đạt 100%.
+3. Nhập lệnh:
+   ```text
+   uart:~$ vehicle status
+   ```
+   để xem toàn bộ thông số giải mã từ 3 phân hệ.
+
+---
+
+## Bộ Lệnh Chẩn Đoán (Zephyr Shell CLI)
+
+| Lệnh | Chức năng thực thi |
+| :--- | :--- |
+| `vehicle status` | Hiển thị tốc độ xe, RPM, nhiệt độ nước làm mát, cấp số, mô-men xoắn, áp lực phanh và trạng thái E2E |
+| `dtc read` | Đọc danh sách các mã lỗi chẩn đoán (DTC) đang kích hoạt |
+| `dtc clear` | Xóa toàn bộ mã lỗi DTC và tắt đèn cảnh báo an toàn |
+| `can stat` | Báo cáo thống kê: tổng khung, tỉ lệ E2E hợp lệ, số lỗi CRC, số khung mất và đếm theo từng ID |
+| `can stat_reset` | Khởi tạo lại toàn bộ bộ đếm thống kê về 0 |
+| `can sim <speed_kmh>` | Phát thủ công 1 khung dữ liệu giả lập với tốc độ chỉ định |
+| `can auto <on\|off>` | Bật hoặc tắt luồng `sim_thread` tự phát dữ liệu xe chạy tần số 5 Hz |
+| `can inject <overheat\|overspeed\|timeout\|corrupt\|replay\|drop [n]>` | Bơm lỗi giả lập tại bộ giải mã Node 1 (không phát lên bus) để kiểm tra module DTC và lớp E2E |
+
+---
+
+## Demo
+
+Demo chạy trên 2 board thật qua bus CAN 500 kbps, toàn bộ thao tác bằng Zephyr Shell của Node 1. Kịch bản gồm hai phần: rút/cắm dây Transceiver để xem hệ thống phát hiện mất kết nối rồi tự phục hồi, và thử lớp an toàn (quản lý DTC, bơm lỗi E2E).
+
+> Các lệnh `can inject corrupt` và `can inject replay` giả lập lỗi ngay trong bộ giải mã của Node 1 (đánh dấu khung kế tiếp là sai CRC hoặc trùng Counter), không phải nhiễu thật trên dây bus.
+
+### 1. Trạng thái E2E khi rút và cắm lại dây
+
+![vehicle status](docs/images/demo-01-vehicle-status-e2e.jpg)
+
+Lệnh `vehicle status` hiển thị thông số xe kèm dòng **E2E Integrity**:
+- Dây còn cắm: `VALID (OK)`.
+- Rút dây Transceiver: `dtc read` báo `DTC_U0100`, `vehicle status` chuyển sang `TIMEOUT / LOST COMM (FAIL)`. Các số hiển thị là giá trị nhận được gần nhất trước khi mất tín hiệu.
+- Cắm dây lại: tự trở về `VALID (OK)`, không cần reset Node 1.
+
+### 2. Rút dây: khung nhận ngừng tăng
+
+![unplug](docs/images/demo-02-unplug-frames-stop-u0100.jpg)
+
+`dtc read` báo `DTC_U0100` (mất tín hiệu CAN quá 1000 ms). Các lần `can stat` liên tiếp đều cho 912 frames: khi dây bị rút, bộ đếm khung nhận đứng yên. Số khung ở ba Mailbox vẫn chia đúng tỉ lệ 5 : 2 : 1 (`570 : 228 : 114`), khớp chu kỳ phát 20 / 50 / 100 ms của Node 2.
+
+### 3. Cắm lại dây: khung nhận tăng tiếp, ghi nhận khung rớt
+
+![replug](docs/images/demo-03-replug-frames-resume.jpg)
+
+Sau khi cắm lại, `can stat` tăng từ 912 lên 1113 frames. Mục `Frame bi rot tren bus` hiện 24: bộ giải mã nhận ra bước nhảy Rolling Counter và cộng dồn số khung đã bỏ lỡ trong lúc mất kết nối. `Frame sai ma CRC-8` vẫn bằng 0 vì dữ liệu nhận được không bị hỏng, chỉ mất một đoạn.
+
+### 4. Xoá mã lỗi: một mã hoặc toàn bộ
+
+![dtc clear](docs/images/demo-04-dtc-clear.jpg)
+
+Khi hệ thống có nhiều mã lỗi, có thể xoá riêng từng mã đã xử lý xong hoặc xoá tất cả. Phiên này bắt đầu với `DTC_U0100` còn tồn đọng từ lần mất kết nối:
+1. `can inject overheat` và `can inject overspeed` thêm `DTC_P0115` và `DTC_P0219`; `dtc read` liệt kê 3 mã.
+2. `dtc clear P0115` chỉ xoá đúng mã đó, còn lại `U0100` và `P0219`.
+3. Bơm `overheat` lần nữa rồi `dtc clear` (không tham số): xoá toàn bộ, `dtc read` báo 0 lỗi.
+
+### 5. Khung sai CRC-8 (`can inject corrupt`)
+
+![crc](docs/images/demo-05-crc-corruption.jpg)
+
+Mỗi lần bơm lỗi, log cảnh báo `Sai ma CRC-8` (ví dụ nhận `0xFD`, tính ra `0x57`) và shell báo số lần vi phạm E2E: `1/3`, `2/3`. Đến lần thứ 3, `safety_monitor` ghi `DTC_U0401` (dữ liệu sai lệch). Lệnh `can stat` cho biết cụ thể số khung sai CRC (tăng từ 1 lên 3) trong khi các khung hợp lệ vẫn tăng đều. Bộ đếm vi phạm cộng dồn theo thời gian và chỉ được xoá bằng `dtc clear`.
+
+### 6. Khung trùng lặp Rolling Counter (`can inject replay`)
+
+![replay](docs/images/demo-06-replay.jpg)
+
+Tương tự mục 5 nhưng với lỗi trùng Counter: log ghi `Duplicate Frame ID 0x123 ... Replay Attack`, `can stat` tăng mục `Frame bi trung lap` (còn `Frame sai ma CRC-8` giữ nguyên 0). Hai loại vi phạm dùng chung một ngưỡng 3 nên lần thứ 3 cũng kích hoạt `DTC_U0401`.
+
+---
+
+## Cấu Trúc Thư Mục
 
 ```text
-stm32f7-baremetal-tft-sdhc/
-├── Inc/
-│   ├── reg.h                   # Memory-mapped register definitions (RM0385)
-│   ├── sys_clock.h             # 216 MHz Over-Drive clock configuration
-│   ├── sdram.h                 # FMC SDRAM initialization & address mapping
-│   ├── ltdc.h                  # 480x272 panel timing & layer setup
-│   ├── dma2d.h                 # Chrom-ART hardware blitting engine
-│   ├── sdmmc.h                 # 4-bit 48MHz-bypass SDMMC driver
-│   ├── touchscreen.h            # FT5336 capacitive touch driver (I2C3)
-│   ├── diskio.h                # Low-level disk I/O interface for FatFs
-│   ├── ff.h / ffconf.h / integer.h  # ChaN FatFs core headers & configuration
-│   ├── font8x8.h                # 8x8 bitmap font table for on-screen text
-│   └── media_player.h          # File menu, FPS overlay & playback pipeline
-├── Src/
-│   ├── main.c                  # System setup & main state machine (splash → menu → play)
-│   ├── sys_clock.c             # PLL, Over-Drive, Flash wait states & SysTick
-│   ├── sdram.c                 # JEDEC 5-step FMC SDRAM initialization
-│   ├── ltdc.c                  # Video timing generator & VBR buffer swapping
-│   ├── dma2d.c                 # DMA2D fill/copy routines used for UI graphics
-│   ├── sdmmc.c                 # SDMMC commands, clock scaling & FIFO reads
-│   ├── touchscreen.c            # FT5336 I2C3 driver: init, coordinate read, gesture mapping
-│   ├── diskio.c                # Hardware bridge to FatFs (read-only)
-│   ├── ff.c                    # ChaN FatFs FAT32 implementation
-│   └── media_player.c          # File scan, on-device menu UI & frame streaming
-├── Startup/
-│   └── startup_stm32f746nghx.s # Cortex-M7 vector table & reset handler
-├── tools/
-│   └── convert_video.py        # Python video transcoder utility
-├── build.ps1                   # Automated build & clean script
-├── Makefile                    # GNU Make recipe
-├── STM32F746NGHX_FLASH.ld      # GCC linker script
-└── README.md
+automotive_can_gateway_cluster/
+├── node1_stm32f7_gateway/          # Node 1: Zephyr RTOS trên STM32F746NG
+│   ├── src/
+│   │   ├── main.c                  # 2 luồng chính: can_worker (prio 5), safety (prio 6)
+│   │   ├── can_gateway.c/.h        # Khởi tạo CAN, quản lý chân STB, cấu hình Filter Bank dải ID
+│   │   ├── dbc_decoder.c/.h        # Bộ giải mã DBC theo ID, kiểm tra E2E, thống kê mạng
+│   │   ├── safety_monitor.c/.h     # Máy trạng thái quản lý mã lỗi DTC
+│   │   └── diag_shell.c            # Shell CLI, luồng mô phỏng sim_thread (prio 7), bộ bơm lỗi
+│   ├── app.overlay                 # Devicetree: ánh xạ chân CAN1, LED cảnh báo, chân STB
+│   ├── prj.conf                    # Cấu hình Kconfig: CAN Subsystem, Shell, MPU Stack Guard
+│   └── CMakeLists.txt
+├── node2_stm32f103_ecu/            # Node 2: Bare-Metal trên STM32F103C8T6
+│   ├── src/
+│   │   ├── main.c                  # Mô phỏng cảm biến và phát 3 bản tin đa chu kỳ 20/50/100ms
+│   │   ├── can_f103.c              # Driver thanh ghi bxCAN, thuật toán round-robin 3 Mailbox
+│   │   └── e2e_encoder.c           # Đóng gói DBC và tính CRC-8 (Lookup Table) cho 3 bản tin
+│   ├── include/can_f103.h, e2e_encoder.h
+│   ├── startup_stm32f103c8tx.s     # Vector table và mã Reset Handler
+│   ├── stm32f103c8tx.ld            # Linker script phân bổ bộ nhớ Flash và SRAM
+│   ├── Makefile / CMakeLists.txt / stm32f103_node.uvprojx
+│   └── README.md                   # Hướng dẫn chi tiết biên dịch và nạp riêng cho Node 2
+├── docs/images/                    # Ảnh chụp terminal dùng trong mục Demo
+└── README.md                       # Tài liệu tổng quan toàn bộ hệ thống
 ```
 
 ---
 
-## ⚠️ Current Limitations & Roadmap
+## Giới Hạn Hiện Tại & Hướng Phát Triển
 
-Documenting these honestly so the numbers in this README always match what's actually running on the board:
-
-* **Read-only filesystem:** `disk_write()` always returns `RES_WRPRT` — this build is playback-only by design, no write path is implemented.
-* **No DMA for SD transfers:** `SDMMC_ReadMultiBlocks()` polls `SDMMC1->STA`/`FIFO` from the CPU in a tight loop rather than using a DMA channel; the ~18 MB/s figure reflects this polled path, not a DMA-driven one.
-* **Stale in-code comment:** the line right above the 4-bit clock switch in `sdmmc.c` is labeled "Nâng xung nhịp lên 24 MHz" but the register value it writes sets `BYPASS=1`, which actually runs the bus at the full 48 MHz `PLL48CLK` — the comment text just wasn't updated after the bypass optimization was added.
-* **`DMA2D_CopyFrame()` exists but is unused:** `dma2d.c` now has a frame-copy helper ready for a future DMA2D-accelerated video path, but the current playback loop still reads each frame straight from `f_read()` into the back buffer — this function isn't called anywhere yet.
-* **`Touch_Init()` doesn't actually gate on chip detection:** the function reads the FT5336 chip-ID register but always returns success regardless of the result, so a missing/faulty touch panel won't be reported — it just silently produces no touch events.
-* **Fixed-format input:** frames must already be pre-converted to raw 480×272 RGB565 at the target frame rate; there is no on-device video decoding.
-
-Planned next steps: wire `DMA2D_CopyFrame()` into the playback path for a fully hardware-accelerated frame blit, DMA-driven SDMMC transfers to free the CPU during reads, make `Touch_Init()` report real failure so the UI can fall back to button-only mode, and basic write support for on-device file management.
+* **Mã lỗi DTC hiện tại:** Module `safety_monitor` đang tập trung giám sát 2 ngưỡng giới hạn từ bản tin động cơ (nhiệt độ nước >105°C và vòng tua >6500 RPM). Hướng mở rộng tiếp theo là bổ sung DTC cho áp lực phanh bất thường (`0x125`) và sai lệch cấp số/mô-men xoắn (`0x124`).
+* **Cấu hình Bit Timing:** Node 1 sử dụng cơ chế tự động tính toán tham số thanh ghi `CAN_BTR` của Zephyr thông qua khai báo `sample-point = <875>` trong Devicetree. Việc can thiệp trực tiếp giá trị thanh ghi BRP, TS1, TS2 chỉ thực hiện ở Node 2 bare-metal.
+* **Xử lý ngắt bộ đệm:** Hàm `can_add_rx_filter_msgq()` sử dụng driver `can_stm32_bxcan` tích hợp sẵn của Zephyr; việc đọc dữ liệu từ thanh ghi FIFO và giải phóng cờ `RFOM0` do driver đảm nhiệm.
+* **Bộ lọc Node 2:** Node 2 hiện sử dụng bộ lọc chấp nhận tất cả (`CAN1_Filter_Config(0x000, 0x000)`) để đơn giản hóa quá trình nghe phản hồi thử nghiệm hai chiều.
+* **Cơ chế báo lỗi ACK tại Node 2:** Hàm `CAN1_Transmit()` chỉ kiểm tra tính sẵn sàng của 3 Mailbox qua cờ `TME0/1/2` trong `CAN_TSR`. Nếu bus mất tín hiệu ACK vật lý từ Node 1, phần cứng bxCAN sẽ tự động phát lại mà không có cờ cảnh báo cấp phần mềm trả về ở tầng ứng dụng Node 2.
 
 ---
 
-## 👥 Author Information
+## Thông Tin Tác Giả
 
-* **Author:** Trần Huỳnh
-* **Major:** Computer Engineering Technology
-* **Faculty:** Faculty of Electrical and Electronics Engineering (FEEE)
-* **Institution:** Ho Chi Minh City University of Technology and Education (HCMUTE)
-* **Email:** [huynhtran30112004@gmail.com](mailto:huynhtran30112004@gmail.com)
-* **GitHub:** [HuynhTran112](https://github.com/HuynhTran112)
+* **Chuyên ngành:** Công Nghệ Kỹ Thuật Máy Tính (Computer Engineering Technology)
+* **Đơn vị:** Trường Đại học Sư phạm Kỹ thuật TP.HCM (HCMUTE)
