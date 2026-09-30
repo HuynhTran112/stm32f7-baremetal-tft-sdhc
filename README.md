@@ -1,7 +1,6 @@
 # High-Performance 60 FPS Bare-Metal Video Player & SDHC Subsystem
 
 [![Target MCU](https://img.shields.io/badge/MCU-STM32F746NG%20(Cortex--M7%20%40%20216MHz)-red.svg)](https://www.st.com/en/microcontrollers-microprocessors/stm32f746ng.html)
-[![Firmware Architecture](https://img.shields.io/badge/Firmware-100%25%20Bare--Metal%20(No%20HAL%2FLL)-blue.svg)](#-key-features)
 [![Display](https://img.shields.io/badge/Display-480x272%20%40%2060%20FPS%20(LTDC%20%2B%20DMA2D)-green.svg)](#️-requirements)
 [![Storage](https://img.shields.io/badge/Storage-MicroSD%20SDHC%20(4--bit%20SDMMC%2048MHz%20Bypass)-purple.svg)](#️-requirements)
 [![Touch](https://img.shields.io/badge/Touch-FT5336%20Capacitive%20via%20I2C3-orange.svg)](#️-requirements)
