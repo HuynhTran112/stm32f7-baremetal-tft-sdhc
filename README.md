@@ -30,7 +30,11 @@ A multimedia player and storage engine written in **100% Bare-Metal C targeting 
 ## 📷 Demo & Playback Showcase
 
 <p align="center">
-  <img src="docs/images/tft_player_hero.png" alt="60 FPS Bare-Metal Video Player Demo" width="650">
+  <a href="https://www.youtube.com/watch?v=ZdNipP22rUw" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.youtube.com/vi/ZdNipP22rUw/maxresdefault.jpg" alt="Demo video display use STM32F7" width="720">
+  </a>
+  <br>
+  <em>▶️ <b>Watch Hardware Demonstration:</b> <a href="https://www.youtube.com/watch?v=ZdNipP22rUw" target="_blank" rel="noopener noreferrer">Demo video display use STM32F7 (60 FPS Bare-Metal Player)</a></em>
 </p>
 
 ### Live Hardware Telemetry Banner
